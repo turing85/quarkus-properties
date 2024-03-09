@@ -1,0 +1,146 @@
+= quarkus-properties
+
+This repository demonstrates a bug with quarkus properties in ``@QuarkusIntegrationTest``s.
+
+== Setup
+
+The application is configured to use a postgres database.
+
+The bug was not present in quarkus version `3.5.1`, and was introduced with version `3.5.2`.
+
+For the `prod`, profile, it is configured to use environment variable `${FOO}` for `quarkus.datasource.jdbc.additional-jdbc-properties.foo`:
+
+.application.properties
+[source, properties]
+----
+quarkus.http.test-port=-1
+quarkus.test.integration-test-profile=test
+quarkus.datasource.db-kind=postgresql
+%prod.quarkus.datasource.username=${DB_USER}
+%prod.quarkus.datasource.password=${DB_PASSWORD}
+%prod.quarkus.datasource.jdbc.additional-jdbc-properties.foo=${FOO}
+----
+
+The application also uses `quarkus-smallrye-health` to export the health of the database.
+
+The application has no code, only this configuration.
+
+=== `@QuarkusTest` to validate the health of the database
+
+We test that the datasource is healthy in test link:src/test/java/de/turing85/quarkus/properties/HealthTest.java[`HealthTest.java`]:
+
+.`HealthTest.java`
+[source, java]
+----
+package de.turing85.quarkus.properties;
+
+import io.quarkus.test.junit.QuarkusTest;
+import io.restassured.RestAssured;
+import org.junit.jupiter.api.Test;
+
+import static org.hamcrest.CoreMatchers.is;
+
+@QuarkusTest
+class HealthTest {
+  @Test
+  void healthTest() {
+    // @formatter:off
+    RestAssured
+        .when().get("/q/health")
+        .then()
+            .body("checks.find { it.name = 'Database connections health check' }.status", is("UP"))
+            .body("checks.find { it.name = 'Database connections health check' }.data.'<default>'", is("UP"));
+    // @formatter:on
+  }
+}
+----
+
+=== `@QuarkusIntegrationTest`
+The corresponding link:src/test/java/de/turing85/quarkus/properties/HealthTestIT.java[`HealthTestIT.java`] just extends the link:src/test/java/de/turing85/quarkus/properties/HealthTest.java[`HealthTest.java`]:
+
+.`HealthTestIT.java`
+[source, java]
+----
+package de.turing85.quarkus.properties;
+
+import io.quarkus.test.junit.QuarkusIntegrationTest;
+
+@QuarkusIntegrationTest
+class HealthTestIT extends HealthTest {
+}
+
+----
+
+=== Execution
+
+When we run './mvnw clean verify`, we see that the ``QuarkusTest```s succeed, but the ``@QuarkusIntegraionTest``s fail because the application fails to start:
+
+.Failure log
+[source,log]
+----
+...
+[INFO] [stdout] ERROR: Failed to start application (with profile [test])
+[INFO] [stdout] java.lang.RuntimeException: Failed to start quarkus
+[INFO] [stdout] 	at io.quarkus.runner.ApplicationImpl.doStart(Unknown Source)
+[INFO] [stdout] 	at io.quarkus.runtime.Application.start(Application.java:101)
+[INFO] [stdout] 	at io.quarkus.runtime.ApplicationLifecycleManager.run(ApplicationLifecycleManager.java:111)
+[INFO] [stdout] 	at io.quarkus.runtime.Quarkus.run(Quarkus.java:71)
+[INFO] [stdout] 	at io.quarkus.runtime.Quarkus.run(Quarkus.java:44)
+[INFO] [stdout] 	at io.quarkus.runtime.Quarkus.run(Quarkus.java:124)
+[INFO] [stdout] 	at io.quarkus.runner.GeneratedMain.main(Unknown Source)
+[INFO] [stdout] 	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+[INFO] [stdout] 	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+[INFO] [stdout] 	at io.quarkus.bootstrap.runner.QuarkusEntryPoint.doRun(QuarkusEntryPoint.java:61)
+[INFO] [stdout] 	at io.quarkus.bootstrap.runner.QuarkusEntryPoint.main(QuarkusEntryPoint.java:32)
+[INFO] [stdout] Caused by: java.util.NoSuchElementException: SRCFG00011: Could not expand value FOO in property quarkus.datasource.jdbc.additional-jdbc-properties.foo
+[INFO] [stdout] 	at io.smallrye.config.ExpressionConfigSourceInterceptor$1.accept(ExpressionConfigSourceInterceptor.java:85)
+[INFO] [stdout] 	at io.smallrye.config.ExpressionConfigSourceInterceptor$1.accept(ExpressionConfigSourceInterceptor.java:61)
+[INFO] [stdout] 	at io.smallrye.common.expression.ExpressionNode.emit(ExpressionNode.java:22)
+[INFO] [stdout] 	at io.smallrye.common.expression.Expression.evaluateException(Expression.java:56)
+[INFO] [stdout] 	at io.smallrye.common.expression.Expression.evaluate(Expression.java:70)
+[INFO] [stdout] 	at io.smallrye.config.ExpressionConfigSourceInterceptor.getValue(ExpressionConfigSourceInterceptor.java:61)
+[INFO] [stdout] 	at io.smallrye.config.ExpressionConfigSourceInterceptor.getValue(ExpressionConfigSourceInterceptor.java:35)
+[INFO] [stdout] 	at io.smallrye.config.SmallRyeConfigSourceInterceptorContext.proceed(SmallRyeConfigSourceInterceptorContext.java:20)
+[INFO] [stdout] 	at io.smallrye.config.SecretKeysHandlerConfigSourceInterceptor.getValue(SecretKeysHandlerConfigSourceInterceptor.java:25)
+[INFO] [stdout] 	at io.smallrye.config.SmallRyeConfigSourceInterceptorContext.proceed(SmallRyeConfigSourceInterceptorContext.java:20)
+[INFO] [stdout] 	at io.smallrye.config.FallbackConfigSourceInterceptor.getValue(FallbackConfigSourceInterceptor.java:24)
+[INFO] [stdout] 	at io.smallrye.config.SmallRyeConfigSourceInterceptorContext.proceed(SmallRyeConfigSourceInterceptorContext.java:20)
+[INFO] [stdout] 	at io.smallrye.config.SmallRyeConfig.getConfigValue(SmallRyeConfig.java:322)
+[INFO] [stdout] 	at io.smallrye.config.SmallRyeConfig.getValue(SmallRyeConfig.java:229)
+[INFO] [stdout] 	at io.smallrye.config.ConfigMappingProvider.lambda$processLazyMapValue$0(ConfigMappingProvider.java:504)
+[INFO] [stdout] 	at io.smallrye.config.ConfigMappingProvider.mapConfigurationInternal(ConfigMappingProvider.java:990)
+[INFO] [stdout] 	at io.smallrye.config.ConfigMappingProvider.lambda$mapConfiguration$3(ConfigMappingProvider.java:962)
+[INFO] [stdout] 	at io.smallrye.config.SecretKeys.doUnlocked(SecretKeys.java:28)
+[INFO] [stdout] 	at io.smallrye.config.ConfigMappingProvider.mapConfiguration(ConfigMappingProvider.java:962)
+[INFO] [stdout] 	at io.smallrye.config.ConfigMappings.mapConfiguration(ConfigMappings.java:91)
+[INFO] [stdout] 	at io.smallrye.config.SmallRyeConfigBuilder.build(SmallRyeConfigBuilder.java:699)
+[INFO] [stdout] 	at io.quarkus.runtime.generated.Config.readConfig(Unknown Source)
+[INFO] [stdout] 	at io.quarkus.runtime.generated.Config.createRunTimeConfig(Unknown Source)
+[INFO] [stdout] 	at io.quarkus.deployment.steps.RuntimeConfigSetup.deploy(Unknown Source)
+[INFO] [stdout] 	... 11 more
+...
+----
+
+When we open the link:pom.xml[`pom.xml`], set `<quarkus.platform.version>` from `3.5.2` to `3.5.1`, and re-execute `./mvnw clean verify`, we see that the build succeed.
+
+== Contributors ✨
+
+Thanks goes to these wonderful people (https://allcontributors.org/docs/en/emoji-key[emoji key]):
+
+++++
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="http://turing85.github.io"><img src="https://avatars.githubusercontent.com/u/32584495?v=4?s=100" width="100px;" alt="Marco Bungart"/><br /><sub><b>Marco Bungart</b></sub></a><br /><a href="#code-turing85" title="Code">💻</a> <a href="#maintenance-turing85" title="Maintenance">🚧</a> <a href="#doc-turing85" title="Documentation">📖</a></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+
+<!-- ALL-CONTRIBUTORS-LIST:END -->
+++++
